@@ -1,0 +1,703 @@
+#+PROPERTY: session *R*
+#+PROPERTY: results output
+
+* Initialize R
+
+#+BEGIN_SRC R
+  library( ascii)
+  options( asciiType= "org")
+  
+  library( doMC)
+  registerDoMC( 8)
+  
+  library( raster)
+  rasterOptions( overwrite= TRUE, progress= "", datatype= "INT1U")
+  rasterOptions()
+  
+  library( stringr)
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+format        : raster 
+datatype      : INT1U 
+overwrite     : TRUE 
+progress      : text 
+timer         : FALSE 
+chunksize     : 1e+07 
+maxmemory     : 1e+08 
+tmpdir        : /tmp/R_raster_tmp/nbest/ 
+tmptime       : 168 
+setfileext    : TRUE 
+tolerance     : 0.1 
+standardnames : TRUE 
+warn depracat.: TRUE
+#+end_example
+
+
+* Geogrpahic coordinates
+
+** Correct invalid georeferencing
+
+The spatial reference system indicated by this dataset's metadata is
+apparently invlaid.  It is a geographical coordinate system but the
+units are arc-seconds.  
+
+
+The process of translating this to decimal degrees has three steps:
+unpack the compressed archive, write a virtual raster tile (VRT)
+metadata wrapper, and edit the VRT metadata.
+
+
+*** Extract the data from the compressed archive
+
+#+BEGIN_SRC sh
+  zcat -c fractgrid.e00.gz > fractgrid.e00
+#+END_SRC
+
+Now we can inspect the metadata to reveal the malformed spatial
+reference system.
+
+#+BEGIN_SRC sh :results output verbatim
+  gdalinfo fractgrid.e00
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+Driver: E00GRID/Arc/Info Export E00 GRID
+Files: fractgrid.e00
+Size is 6936, 2984
+Coordinate System is:
+GEOGCS["NAD27",
+    DATUM["North_American_Datum_1927",
+        SPHEROID["Clarke 1866",6378206.4,294.978698213898,
+            AUTHORITY["EPSG","7008"]],
+        AUTHORITY["EPSG","6267"]],
+    PRIMEM["Greenwich",0,
+        AUTHORITY["EPSG","8901"]],
+    UNIT["degree",0.0174532925199433,
+        AUTHORITY["EPSG","9108"]],
+    AUTHORITY["EPSG","4267"]]
+Origin = (-449100.000000000000000,177840.000000000000000)
+Pixel Size = (30.000000000000000,-30.000000000000000)
+Corner Coordinates:
+Upper Left  ( -449100.000,  177840.000) (Invalid angle,Invalid angle)
+Lower Left  ( -449100.000,   88320.000) (Invalid angle,Invalid angle)
+Upper Right ( -241020.000,  177840.000) (Invalid angle,Invalid angle)
+Lower Right ( -241020.000,   88320.000) (Invalid angle,Invalid angle)
+Center      ( -345060.000,  133080.000) (Invalid angle,Invalid angle)
+Band 1 Block=6936x1 Type=Int32, ColorInterp=Undefined
+  Min=1.000 Max=10500.000 
+  Minimum=1.000, Maximum=10500.000, Mean=5213.697, StdDev=3001.074
+  NoData Value=-2147483647
+#+end_example
+
+
+*** Create a virtual raster wrapper
+
+Convert the native Arc/INFO grid format (.e00) to a virtual raster
+tile (.vrt) using the gdal_translate utility.
+
+#+BEGIN_SRC sh :session *shell* :results output verbatim
+  gdal_translate -of VRT fractgrid.e00 fractgrid.vrt
+#+END_SRC
+
+#+RESULTS:
+: 
+: Input file size is 6936, 2984
+
+
+*** Edit the georeferencing metadata
+
+The previous step was necessary because GDAL's Arc/INFO grid driver
+does not support update access to an existing dataset, meaning that
+the gdal_edit.py utility will not be able to fix the metadata in
+place. Instead it will edit the VRT file which will override the
+metadata of the dataset to which it points.
+
+#+BEGIN_SRC sh
+  gdal_edit.py -a_ullr -124.75 49.40 -66.95000 24.53333 fractgrid.vrt  
+#+END_SRC
+
+The metadata has been edited in place.
+
+#+BEGIN_SRC sh :results output verbatim
+  gdalinfo fractgrid.vrt
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+Driver: VRT/Virtual Raster
+Files: fractgrid.vrt
+       fractgrid.e00
+Size is 6936, 2984
+Coordinate System is:
+GEOGCS["NAD27",
+    DATUM["North_American_Datum_1927",
+        SPHEROID["Clarke 1866",6378206.4,294.978698213898,
+            AUTHORITY["EPSG","7008"]],
+        AUTHORITY["EPSG","6267"]],
+    PRIMEM["Greenwich",0,
+        AUTHORITY["EPSG","8901"]],
+    UNIT["degree",0.0174532925199433,
+        AUTHORITY["EPSG","9108"]],
+    AUTHORITY["EPSG","4267"]]
+Origin = (-124.750000000000000,49.399999999999999)
+Pixel Size = (0.008333333333333,-0.008333334450402)
+Corner Coordinates:
+Upper Left  (-124.7500000,  49.4000000) (124d45' 0.00"W, 49d24' 0.00"N)
+Lower Left  (-124.7500000,  24.5333300) (124d45' 0.00"W, 24d31'59.99"N)
+Upper Right ( -66.9500000,  49.4000000) ( 66d57' 0.00"W, 49d24' 0.00"N)
+Lower Right ( -66.9500000,  24.5333300) ( 66d57' 0.00"W, 24d31'59.99"N)
+Center      ( -95.8500000,  36.9666650) ( 95d51' 0.00"W, 36d57'59.99"N)
+Band 1 Block=128x128 Type=Int32, ColorInterp=Undefined
+  Min=1.000 Max=10500.000 
+  NoData Value=-2147483647
+#+end_example
+
+
+** Inspect the data
+
+Now in R load the virtual raster and inspect the first ten non-null values.
+
+#+BEGIN_SRC R :session *R*
+  fractgrid <- raster( "fractgrid.vrt")
+  fractgrid[ !is.na( fractgrid[1:100000])][ 1:10]
+  
+#+END_SRC
+
+#+RESULTS:
+| 4234 |
+| 3925 |
+| 3925 |
+| 4234 |
+| 3925 |
+| 3925 |
+| 3925 |
+| 3925 |
+| 3925 |
+| 3925 |
+
+It is not clear how to relate these IDs to the labels in
+mu_fract.ascii.  However, this raster object is still a useful
+template for creating a mask for all of the CONUS-Soil data and
+for loading raw data in the following sections.
+
+
+** Create a mask
+
+#+BEGIN_SRC R :session *R* :results output
+  conusMask <-
+    raster( fractgrid)
+  conusMask[] <-
+    ifelse( is.na( fractgrid[]), NA, 1)
+  conusMask <-
+    writeRaster(
+      conusMask,
+      "output/conusMask.tif",
+      datatype= "LOG1S",
+      overwrite= TRUE)
+  conusMask
+#+END_SRC
+
+#+RESULTS:
+: class       : RasterLayer 
+: dimensions  : 2984, 6936, 20697024  (nrow, ncol, ncell)
+: resolution  : 0.008333333, 0.008333334  (x, y)
+: extent      : -124.75, -66.95, 24.53333, 49.4  (xmin, xmax, ymin, ymax)
+: coord. ref. : +proj=longlat +datum=NAD27 +no_defs +ellps=clrk66 +nadgrids=@conus,@alaska,@ntv2_0.gsb,@ntv1_can.dat 
+: data source : /project/joshuaelliott/conus-soil/output/conusMask.tif 
+: names       : conusMask 
+: values      : 1, 1  (min, max)
+
+*** Check that the null value is properly set
+
+#+BEGIN_SRC sh :results output
+  gdalinfo output/conusMask.tif | grep NoData
+#+END_SRC
+
+#+RESULTS:
+:   NoData Value=255
+
+
+** Convert the band-sequential binary arrays to georeferenced rasters
+
+*** TODO Download and unpack the array
+
+
+*** Load the unpacked array
+
+#+BEGIN_SRC R :session *R* :results value
+  clayBsq <-
+    file( "clay.bsq", open= "rb")
+  clay <-
+    array(
+      readBin(
+        clayBsq,
+        what= "integer",
+        size= 1,
+        n= 6936 * 2984 * 11),
+      dim= c( 6936, 2984, 11))
+  close( clayBsq)
+  clay[ 4001:4010, 1501:1510, 1]
+#+END_SRC
+
+#+RESULTS:
+| 13 | 13 | 13 | 13 | 13 | 13 | 14 | 14 | 14 | 14 |
+| 13 | 13 | 13 | 13 | 13 | 13 | 14 | 14 | 14 | 14 |
+| 13 | 13 | 13 | 13 | 13 | 14 | 14 | 14 | 14 | 14 |
+| 13 | 13 | 13 | 13 | 14 | 14 | 14 | 14 | 14 | 14 |
+| 14 | 13 | 13 | 13 | 13 | 13 | 13 | 14 | 14 | 14 |
+| 14 | 13 | 13 | 13 | 13 | 13 | 13 | 14 | 14 | 14 |
+| 14 | 13 | 13 | 13 | 13 | 13 | 13 | 14 | 14 | 14 |
+| 14 | 13 | 13 | 13 | 13 | 13 | 14 | 14 | 14 | 14 |
+| 14 | 14 | 13 | 13 | 13 | 13 | 14 | 14 | 14 | 14 |
+| 14 | 14 | 14 | 13 | 13 | 13 | 13 | 13 | 14 | 14 |
+
+
+*** Set up an empty raster object with correct attributes
+
+#+BEGIN_SRC R :session *R* :results output
+  clayBrick <- brick( fractgrid, values= FALSE)
+  dim( clayBrick) <- c( 2984, 6936, 11)
+  clayBrick
+#+END_SRC
+
+#+RESULTS:
+: class       : RasterBrick 
+: dimensions  : 2984, 6936, 20697024, 11  (nrow, ncol, ncell, nlayers)
+: resolution  : 0.008333333, 0.008333334  (x, y)
+: extent      : -124.75, -66.95, 24.53333, 49.4  (xmin, xmax, ymin, ymax)
+: coord. ref. : +proj=longlat +datum=NAD27 +no_defs +ellps=clrk66 +nadgrids=@conus,@alaska,@ntv2_0.gsb,@ntv1_can.dat
+
+
+*** Inject the values from the raw array and write the new raster
+
+#+BEGIN_SRC R :session *R* :results output
+  clayBrick[] <- clay
+  ## clayBrick <-
+  ##   writeRaster( clayBrick, "clay.tif", overwrite= TRUE)
+  clayBrick <-
+    mask(
+      clayBrick,
+      mask= conusMask,
+      filename= "clay.tif",
+      overwrite= TRUE,
+      datatype= "INT1U")
+  clayBrick <- setMinMax( clayBrick)
+  clayBrick
+#+END_SRC
+
+#+RESULTS:
+: class       : RasterBrick 
+: dimensions  : 2984, 6936, 20697024, 11  (nrow, ncol, ncell, nlayers)
+: resolution  : 0.008333333, 0.008333334  (x, y)
+: extent      : -124.75, -66.95, 24.53333, 49.4  (xmin, xmax, ymin, ymax)
+: coord. ref. : +proj=longlat +datum=NAD27 +no_defs +ellps=clrk66 +nadgrids=@conus,@alaska,@ntv2_0.gsb,@ntv1_can.dat 
+: data source : /project/joshuaelliott/conus-soil/clay.tif 
+: names       : layer.1, layer.2, layer.3, layer.4, layer.5, layer.6, layer.7, layer.8, layer.9, layer.10, layer.11 
+: min values  :       0,       0,       0,       0,       0,       0,       0,       0,       0,        0,        0 
+: max values  :      58,      58,      58,      58,      58,      58,      58,      58,      58,       58,       58
+
+
+**** TODO Why the ceiling on clay fraction at 58%?  
+
+Is this real or does it indicate some kind of bug?
+
+
+* Albers equal area projection
+
+** Extract georeferencing and mask from an Arc/INFO file.
+
+ALthough it is not clear how to utilize the Arc/INFO grid data
+provided by the Soil Info web site it is still necessary to extract
+the extent from one of those files in order to properly georeference
+the binay band-sequential data provided.
+
+#+BEGIN_SRC sh
+  cd data/albers
+  wget --no-clobber \
+    ftp://dbftp.essc.psu.edu/pub/data/1997-0006/fractgrid.e00.gz
+  zcat fractgrid.e00.gz > fractgrid.e00 
+#+END_SRC
+
+#+BEGIN_SRC R 
+  albers <- raster( "data/albers/fractgrid.e00")
+  albers
+#+END_SRC
+
+#+RESULTS:
+: class       : RasterLayer 
+: dimensions  : 2896, 4616, 13367936  (nrow, ncol, ncell)
+: resolution  : 1000, 1000  (x, y)
+: extent      : -2357000, 2259000, 277000, 3173000  (xmin, xmax, ymin, ymax)
+: coord. ref. : +proj=aea +lat_1=0 +lat_2=29.5 +lat_0=45.5 +lon_0=0 +x_0=0 +y_0=-96 +datum=NAD27 +units=m +no_defs +ellps=clrk66 +nadgrids=@conus,@alaska,@ntv2_0.gsb,@ntv1_can.dat 
+: data source : /project/joshuaelliott/conus-soil/data/albers/fractgrid.e00 
+: names       : fractgrid 
+: values      : 1, 10500  (min, max)
+
+** Compare projection of NLCD data
+
+#+BEGIN_SRC R
+  nlcd <- raster( "blox/nlcd/data/NLCD2006_landcover_4-20-11_se5/nlcd2006_landcover_4-20-11_se5.img")
+  nlcd  
+#+END_SRC
+
+#+RESULTS:
+: class       : RasterLayer 
+: dimensions  : 104424, 161190, 16832104560  (nrow, ncol, ncell)
+: resolution  : 30, 30  (x, y)
+: extent      : -2493045, 2342655, 177285, 3310005  (xmin, xmax, ymin, ymax)
+: coord. ref. : +proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+: data source : /project/joshuaelliott/conus-soil/blox/nlcd/data/NLCD2006_landcover_4-20-11_se5/nlcd2006_landcover_4-20-11_se5.img 
+: names       : nlcd2006_landcover_4.20.11_se5 
+: values      : 0, 95  (min, max)
+
+The proj4 strings do not match, so lets assume that the extents are
+correct and just try plugging in the parameters from the NLCD raster
+rather than the PSU Arc/INFO raster.  It was clear from my attempts to
+visualize and reproject the former in QGIS that something was wrong.
+
+#+BEGIN_SRC R
+  proj4string( albers) <- proj4string( nlcd)
+  albers
+#+END_SRC
+
+#+RESULTS:
+: class       : RasterLayer 
+: dimensions  : 2896, 4616, 13367936  (nrow, ncol, ncell)
+: resolution  : 1000, 1000  (x, y)
+: extent      : -2357000, 2259000, 277000, 3173000  (xmin, xmax, ymin, ymax)
+: coord. ref. : +proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+: data source : /project/joshuaelliott/conus-soil/data/albers/fractgrid.e00 
+: names       : fractgrid 
+: values      : 1, 10500  (min, max)
+
+
+#+BEGIN_SRC R
+  conusMask <-
+    raster( albers)
+  conusMask[] <-
+    ifelse( is.na( albers[]), NA, 1)
+  conusMask <-
+    writeRaster(
+      conusMask,
+      "output/albers/conusMask.tif",
+      datatype= "LOG1S")
+  conusMask
+#+END_SRC
+
+#+RESULTS:
+: class       : RasterLayer 
+: dimensions  : 2896, 4616, 13367936  (nrow, ncol, ncell)
+: resolution  : 1000, 1000  (x, y)
+: extent      : -2357000, 2259000, 277000, 3173000  (xmin, xmax, ymin, ymax)
+: coord. ref. : +proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+: data source : /project/joshuaelliott/conus-soil/output/albers/conusMask.tif 
+: names       : conusMask 
+: values      : 1, 1  (min, max)
+
+That seems to fix the problem.
+
+
+** Download and process the binary arrays
+
+*** Gather the URLs
+
+These are the URLs for Albers Equal Area projection data in the
+"Other users of gridded data" sections.
+
+#+BEGIN_SRC R :results silent
+  bsqUrls <- list(
+    clay=      "ftp://dbftp.essc.psu.edu/pub/data/1997-0006/clay.bsq.gz",
+    sand=      "ftp://dbftp.essc.psu.edu/pub/data/1997-0006/sand.bsq.gz",
+    silt=      "ftp://dbftp.essc.psu.edu/pub/data/1997-0006/silt.bsq.gz",
+    bd=        "ftp://dbftp.essc.psu.edu/pub/data/1996-0127/bd.bsq.gz",
+    awc=       "ftp://dbftp.essc.psu.edu/pub/data/1996-0087/awc.bsq.gz",
+    kfact=     "ftp://dbftp.essc.psu.edu/pub/data/1998-0111/kfact.bsq.gz",
+    layertext= "ftp://dbftp.essc.psu.edu/pub/data/1995-0792/layertext.bsq.gz",
+    domfrag=   "ftp://dbftp.essc.psu.edu/pub/data/1997-0004/domfrag.bsq.gz",
+    poros=     "ftp://dbftp.essc.psu.edu/pub/data/1996-0171/poros.bsq.gz",
+    ph=        "ftp://dbftp.essc.psu.edu/pub/data/2001-0001/ph.bsq.gz",
+    hsgpct=    "ftp://dbftp.essc.psu.edu/pub/data/1996-0088/hsgpct.bsq.gz",
+    rockdepm=  "ftp://dbftp.essc.psu.edu/pub/data/1996-0001/rockdepm.bsq.gz",
+    perm=      "ftp://dbftp.essc.psu.edu/pub/data/2000-0004/perm.bsq.gz",
+    plast=     "ftp://dbftp.essc.psu.edu/pub/data/2000-0001/plast.bsq.gz")
+#+END_SRC
+
+
+#+BEGIN_SRC R :results raw
+  downloadBsq <-  function( name= "clay") {
+    system(
+      paste(
+        "wget",
+        "--no-clobber",
+        "--no-verbose",
+        bsqUrls[[ name]],
+        "--directory-prefix=data/albers",
+        "2>&1"),
+      intern= TRUE)
+    sprintf( "data/albers/%s", basename( bsqUrls[[ name]]))
+  }
+    
+  bsqFiles <-
+    foreach( name= names( bsqUrls)) %dopar% {
+      downloadBsq( name)}
+  names( bsqFiles) <- names( bsqUrls)
+
+  ascii( bsqFiles, list.type= "label")
+#+END_SRC  
+
+#+RESULTS:
+- clay :: data/albers/clay.bsq.gz
+- sand :: data/albers/sand.bsq.gz
+- silt :: data/albers/silt.bsq.gz
+- bd :: data/albers/bd.bsq.gz
+- awc :: data/albers/awc.bsq.gz
+- kfact :: data/albers/kfact.bsq.gz
+- layertext :: data/albers/layertext.bsq.gz
+- domfrag :: data/albers/domfrag.bsq.gz
+- poros :: data/albers/poros.bsq.gz
+- ph :: data/albers/ph.bsq.gz
+- hsgpct :: data/albers/hsgpct.bsq.gz
+- rockdepm :: data/albers/rockdepm.bsq.gz
+- perm :: data/albers/perm.bsq.gz
+- plast :: data/albers/plast.bsq.gz
+
+#+BEGIN_SRC R
+  ## clayBsqCon <- gzfile( bsqFiles[[ "clay"]], open= "rb")
+  
+  ## bsqCons <-
+  ##   foreach( name= names( bsqUrls)) %dopar% {
+  ##     gzfile( downloadBsq( name), open= "rb")}
+  ## names( bsqCons) <- names( bsqUrls)
+  
+  
+  ## bsqCons <-
+  ##   lapply( bsqFiles, gzfile, open= "rb")
+  
+  brickFromBsq <- function( file) {
+    thisBrick <-
+      brick( albers, values= FALSE)
+    dim( thisBrick) <-
+      c( dim( thisBrick)[ 1:2], 11)
+    con <-
+      gzfile( file, open= "rb")
+    thisBrick[] <-
+      readBin( con, what= "integer", size= 1,
+              n= prod( dim( thisBrick)))
+    close( con)
+    varName <-
+      str_match(
+        basename( file),
+        "^[^\\.]+")
+    thisBrick <-
+      mask(
+        thisBrick,
+        mask= albers,
+        filename= sprintf( "output/albers/%s.tif", varName))
+    thisBrick
+  }
+#+END_SRC
+
+#+BEGIN_SRC R
+  psuBricks <- llply( bsqFiles, brickFromBsq, .parallel= TRUE)
+#+END_SRC
+
+#+BEGIN_SRC R
+  ascii(
+    llply( psuBricks, filename),
+    list.type= "label")
+  
+#+END_SRC
+
+#+RESULTS:
+: - clay :: /project/joshuaelliott/conus-soil/output/albers/clay.tif
+: - sand :: /project/joshuaelliott/conus-soil/output/albers/sand.tif
+: - silt :: /project/joshuaelliott/conus-soil/output/albers/silt.tif
+
+
+** Check the results of the soil fractions (clay, sand, silt)
+
+#+BEGIN_SRC R
+  psuBricks$clay
+#+END_SRC
+
+#+RESULTS:
+: class       : RasterBrick 
+: dimensions  : 2896, 4616, 13367936, 11  (nrow, ncol, ncell, nlayers)
+: resolution  : 1000, 1000  (x, y)
+: extent      : -2357000, 2259000, 277000, 3173000  (xmin, xmax, ymin, ymax)
+: coord. ref. : +proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+: data source : /project/joshuaelliott/conus-soil/output/albers/clay.tif 
+: names       : layer.1, layer.2, layer.3, layer.4, layer.5, layer.6, layer.7, layer.8, layer.9, layer.10, layer.11 
+: min values  :       0,       0,       0,       0,       0,       0,       0,       0,       0,        0,        0 
+: max values  :      58,      58,      58,      58,      58,      58,      58,      58,      58,       58,       58
+
+Why are all of the maxima equal?
+
+*** Check a sample
+
+#+BEGIN_SRC R :results raw
+  ascii(
+    matrix(
+      subset( psuBricks$clay, 1)[ 1001:1010, 1501:1510],
+      nrow= 10),
+    digits=0)
+#+END_SRC
+
+#+RESULTS:
+ | 16 | 18 | 18 | 18 | 16 | 16 | 16 | 16 | 16 | 16 |
+ | 16 | 16 | 18 | 18 | 18 | 18 | 16 | 16 | 16 | 16 |
+ | 16 | 16 | 18 | 18 | 18 | 18 | 18 | 18 | 16 | 16 |
+ | 16 | 16 | 18 | 18 | 18 | 18 | 18 | 16 | 16 | 16 |
+ | 16 | 16 | 18 | 18 | 18 | 18 | 16 | 16 | 16 | 16 |
+ | 16 | 16 | 18 | 18 | 18 | 16 | 18 | 18 | 16 | 16 |
+ | 16 | 18 | 18 | 18 | 18 | 18 | 18 | 16 | 16 | 15 |
+ | 18 | 18 | 18 | 18 | 18 | 18 | 16 | 16 | 15 | 15 |
+ | 18 | 18 | 18 | 18 | 18 | 16 | 16 | 16 | 15 | 15 |
+ | 18 | 18 | 18 | 18 | 16 | 16 | 16 | 16 | 16 | 15 |
+
+#+BEGIN_SRC R :results raw
+  ascii(
+    freq( psuBricks$clay, merge= TRUE),
+    include.rownames= FALSE,
+    colnames= c( "value", paste( "layer", 1:11)),
+    digits=0)
+#+END_SRC
+
+#+RESULTS:
+ | value | layer 1 | layer 2 | layer 3 | layer 4 | layer 5 | layer 6 | layer 7 | layer 8 | layer 9 | layer 10 | layer 11 |
+ |-------+---------+---------+---------+---------+---------+---------+---------+---------+---------+----------+----------|
+ |     0 |  288291 |  287573 |  308925 |  487937 |  746143 | 1176278 | 1571689 | 2164755 | 2691388 |  6688796 |  7796441 |
+ |     3 |  225720 |  225966 |  222336 |  202039 |  201529 |  187948 |  162937 |  174442 |  186289 |    35720 |      867 |
+ |     4 |  128462 |  124400 |  127300 |  102826 |   85019 |   91342 |   87786 |  108972 |  101860 |    12046 |      902 |
+ |     5 |  105237 |  107214 |  107621 |   93844 |   82776 |   85458 |   74546 |   52703 |   77886 |    17084 |     1564 |
+ |     6 |  129130 |  124658 |   76838 |   75371 |   54352 |   40257 |   63282 |   90342 |   82666 |     8410 |     1458 |
+ |     7 |  114755 |  102688 |   99461 |   66304 |   81646 |   58279 |   68735 |   91872 |   69549 |     8912 |      318 |
+ |     8 |  132973 |  132479 |  108618 |   99116 |   49623 |   92289 |   96781 |   93313 |   87694 |    11417 |          |
+ |     9 |  173989 |  166292 |  121677 |   73062 |   87881 |   81897 |  118050 |  116322 |  132388 |    15685 |       40 |
+ |    10 |  475579 |  429789 |  322578 |  219065 |  203590 |  193144 |  178237 |  178979 |  194955 |    31444 |          |
+ |    11 |  362850 |  303874 |  231041 |  182980 |  143568 |  131142 |  122236 |  109157 |   94966 |    26751 |          |
+ |    12 |  318193 |  328284 |  298842 |  217893 |  161113 |  132401 |  129642 |  131789 |  138727 |    14939 |          |
+ |    13 |  908485 |  888036 |  696533 |  446722 |  322545 |  267745 |  239954 |  200320 |  225078 |    30917 |     1253 |
+ |    14 |  570505 |  569662 |  475168 |  307933 |  275780 |  223916 |  201981 |  166030 |  152156 |    23139 |          |
+ |    15 |  464391 |  407599 |  421684 |  326556 |  245834 |  191269 |  200437 |  168890 |  188154 |    27478 |          |
+ |    16 |  395815 |  387418 |  384652 |  252327 |  213150 |  185647 |  191913 |  179818 |  167536 |    13715 |          |
+ |    17 |  360311 |  347816 |  345803 |  252780 |  213581 |  200245 |  203043 |  126923 |  123280 |    14513 |          |
+ |    18 |  583870 |  470159 |  423365 |  341112 |  235895 |  212216 |  153232 |  172682 |  189456 |    42193 |     1630 |
+ |    19 |  264235 |  330175 |  273898 |  253841 |  222664 |  193911 |  187629 |  130873 |  192604 |    25282 |          |
+ |    20 |  212196 |  232827 |  242979 |  247598 |  222183 |  151486 |  137099 |  166868 |  154366 |    17408 |          |
+ |    21 |  150734 |  188676 |  216843 |  211569 |  176010 |  193607 |  156383 |  145248 |  154957 |    31108 |          |
+ |    22 |   96105 |  144148 |  244502 |  270332 |  204197 |  159374 |  129583 |  118798 |  122109 |    26861 |          |
+ |    23 |  105417 |  121093 |  165489 |  234056 |  187301 |  146053 |  134801 |  116968 |  110179 |    26289 |          |
+ |    24 |  118799 |  121947 |  190427 |  147398 |  164543 |  156656 |  142149 |  150009 |  120005 |    24119 |          |
+ |    25 |   89360 |   95777 |  131739 |  218422 |  189218 |  157163 |  167524 |  150702 |  134368 |    38353 |          |
+ |    26 |   76151 |   92484 |  148542 |  183246 |  213769 |  158213 |  159966 |  136972 |   88868 |    23182 |          |
+ |    27 |   68900 |   86378 |  115073 |  163644 |  202384 |  210610 |  110288 |  125139 |   84996 |    75117 |          |
+ |    28 |   45898 |   61817 |  101449 |  155752 |  142318 |  130957 |  170231 |  107345 |  112720 |    22025 |          |
+ |    29 |   68754 |  104671 |   74434 |  210927 |  203130 |  171606 |  143798 |  135611 |   95575 |    23422 |      236 |
+ |    30 |   48560 |   54409 |   87262 |   98580 |  138123 |  162643 |  161434 |  118048 |  159776 |    15475 |          |
+ |    31 |   53538 |   60647 |  102195 |  171235 |  178402 |  135727 |  138259 |  144156 |  101507 |    21652 |          |
+ |    32 |   55264 |   61211 |   75324 |  106305 |  135430 |  172434 |  128561 |   99310 |  106887 |    14087 |          |
+ |    33 |   70857 |   75511 |  110433 |  131039 |  126477 |  151930 |  150897 |  143261 |   98896 |    19198 |          |
+ |    34 |   63514 |   57751 |   91024 |  120114 |  192581 |  197005 |  224316 |  248983 |  152808 |    52675 |     3536 |
+ |    35 |   41631 |   45289 |   44671 |   71818 |  118258 |  154083 |  144812 |  116006 |   63022 |     8909 |          |
+ |    36 |   43748 |   42815 |   32085 |   59993 |  109435 |   87726 |  150093 |   65796 |   56056 |    13643 |          |
+ |    37 |   24475 |   23764 |   41970 |   81123 |   65341 |  115813 |   67957 |   79593 |   50929 |    11139 |          |
+ |    38 |   20241 |   22539 |   41351 |   55801 |   85919 |   70411 |   58227 |   84808 |   47871 |     8933 |          |
+ |    39 |   17463 |   21421 |   28445 |   74587 |   83563 |   89068 |   75955 |   69796 |   29332 |    15045 |          |
+ |    40 |   15823 |   16981 |   39972 |   59660 |   86712 |   69990 |   74291 |   66476 |   49050 |    10521 |          |
+ |    41 |   26387 |   24070 |   27733 |   91066 |   65760 |   73434 |   65363 |   42371 |   23254 |    10492 |          |
+ |    42 |   11493 |   12038 |   28608 |   55159 |   79591 |   71118 |   44758 |   65646 |   31419 |     6509 |          |
+ |    43 |   19511 |   24719 |   30786 |   46965 |   71101 |   71440 |   63258 |   43213 |   37931 |    13583 |          |
+ |    44 |   13774 |   17505 |   20881 |   50634 |   56662 |   85190 |   66134 |   54062 |   72257 |     4193 |          |
+ |    45 |   28834 |   22750 |   29616 |   20571 |   48813 |   77004 |   69081 |   50982 |   50565 |    16677 |          |
+ |    46 |   30085 |   29304 |   35702 |   43043 |   65475 |   82445 |   79962 |   77767 |   40977 |     6447 |          |
+ |    47 |   20384 |   19686 |   30920 |   28499 |   41674 |   42209 |   61377 |   31969 |   38592 |     7727 |          |
+ |    48 |   11268 |   18683 |   20217 |   36863 |   35373 |   27171 |   55920 |   25814 |   28547 |    10068 |          |
+ |    49 |    5981 |    6987 |   13866 |   35829 |   48006 |   55293 |   41477 |   37022 |   31850 |    36128 |          |
+ |    50 |   12650 |   13499 |   20011 |   35918 |   24899 |   60855 |   41774 |   72113 |   55794 |    26678 |          |
+ |    51 |   16290 |   24659 |   22931 |   36176 |   69576 |   43863 |   69843 |   42369 |   25681 |    18850 |          |
+ |    52 |   13857 |   14987 |   14005 |   22869 |   48631 |   70507 |   54137 |   27795 |   26261 |     9966 |          |
+ |    53 |   18437 |   20856 |   27622 |   44355 |   77301 |   68052 |   39516 |   31565 |   23357 |     9822 |          |
+ |    54 |    8804 |   10970 |   20594 |   31546 |   38817 |   24694 |   38001 |   42851 |   27731 |     9460 |          |
+ |    55 |   29416 |   22904 |   20319 |   25166 |   32856 |   23150 |   20238 |   12765 |   15035 |     8112 |       40 |
+ |    56 |   35635 |   32442 |   25176 |   38868 |   47084 |   67312 |   66567 |   50135 |   50643 |    39847 |          |
+ |    57 |    9996 |   17726 |   29617 |   50705 |   63104 |   37969 |   20157 |   23846 |   15332 |     6992 |          |
+ |    58 |    6885 |    9883 |   18753 |   40767 |   43200 |   40261 |   33609 |   29546 |   23771 |    20753 |     1621 |
+ |       | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 |  5558030 |  5558030 |
+
+
+*** Sum the soil fractions
+
+#+BEGIN_SRC R
+  psuTotalFracs <- psuBricks$clay + psuBricks$sand + psuBricks$silt
+  psuTotalFracs <-
+    writeRaster(
+      psuTotalFracs,
+      filename= "output/albers/psuTotalFracs.tif")
+  psuTotalFracs
+#+END_SRC
+
+#+RESULTS:
+: class       : RasterBrick 
+: dimensions  : 2896, 4616, 13367936, 11  (nrow, ncol, ncell, nlayers)
+: resolution  : 1000, 1000  (x, y)
+: extent      : -2357000, 2259000, 277000, 3173000  (xmin, xmax, ymin, ymax)
+: coord. ref. : +proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+: data source : /project/joshuaelliott/conus-soil/output/albers/psuTotalFracs.tif 
+: names       : psuTotalFracs.1, psuTotalFracs.2, psuTotalFracs.3, psuTotalFracs.4, psuTotalFracs.5, psuTotalFracs.6, psuTotalFracs.7, psuTotalFracs.8, psuTotalFracs.9, psuTotalFracs.10, psuTotalFracs.11 
+: min values  :               0,               0,               0,               0,               0,               0,               0,               0,               0,                0,                0 
+: max values  :             101,             101,             101,             101,             101,             101,             101,             101,             101,              101,              101
+
+#+BEGIN_SRC R :results raw
+  ascii(
+    matrix(
+      subset( psuTotalFracs, 1)[ 1001:1010, 1501:1510],
+      nrow= 10),
+    digits=0)
+#+END_SRC
+
+#+RESULTS:
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+ | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+
+#+BEGIN_SRC R :results raw
+  ## psuTotalFreqs <- freq( psuTotalFracs, merge= TRUE)
+  ascii(
+    psuTotalFreqs,
+    include.rownames= FALSE,
+    colnames= c( "value", paste( "layer", 1:11)),
+    digits=0)
+#+END_SRC
+
+#+RESULTS:
+ | value | layer 1 | layer 2 | layer 3 | layer 4 | layer 5 | layer 6 | layer 7 | layer 8 | layer 9 | layer 10 | layer 11 |
+ |-------+---------+---------+---------+---------+---------+---------+---------+---------+---------+----------+----------|
+ |     0 |  288291 |  287573 |  308925 |  487937 |  746143 | 1176278 | 1571689 | 2164755 | 2691388 |  6688796 |  7796441 |
+ |    99 |  865655 |  879698 |  874583 |  803333 |  751222 |  726804 |  653002 |  629995 |  600824 |    94132 |      902 |
+ |   100 | 5773677 | 5746922 | 5770853 | 5568378 | 5434477 | 5061894 | 4776407 | 4348779 | 3867334 |   896263 |    10625 |
+ |   101 |  882283 |  895713 |  855545 |  950258 |  878064 |  844930 |  808808 |  666377 |  650360 |   130715 |     1938 |
+ |       | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 | 5558030 |  5558030 |  5558030 |
+
+
+** TODO Check the dimensions of the kfact variable
+
+** TODO Incorporate look-up of texture classes
+#+BEGIN_SRC R
+list(
+layertext= "ftp://dbftp.essc.psu.edu/pub/data/1995-0792/textclass.ascii",
+domfrag="ftp://dbftp.essc.psu.edu/pub/data/1997-0004/fragclass.ascii",
+
+
+#+END_SRC
+

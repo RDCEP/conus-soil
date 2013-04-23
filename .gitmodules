@@ -1,0 +1,3 @@
+[submodule "blox/nlcd"]
+	path = blox/nlcd
+	url = git@github.com:RDCEP/nlcd.git
