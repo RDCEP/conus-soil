@@ -35,7 +35,7 @@ warn depracat.: TRUE
 #+end_example
 
 
-* Geogrpahic coordinates
+* Geographic coordinates					   :noexport:
 
 ** Correct invalid georeferencing
 
@@ -336,6 +336,7 @@ the binay band-sequential data provided.
 : names       : fractgrid 
 : values      : 1, 10500  (min, max)
 
+
 ** Compare projection of NLCD data
 
 #+BEGIN_SRC R
@@ -421,12 +422,13 @@ These are the URLs for Albers Equal Area projection data in the
     ph=        "ftp://dbftp.essc.psu.edu/pub/data/2001-0001/ph.bsq.gz",
     hsgpct=    "ftp://dbftp.essc.psu.edu/pub/data/1996-0088/hsgpct.bsq.gz",
     rockdepm=  "ftp://dbftp.essc.psu.edu/pub/data/1996-0001/rockdepm.bsq.gz",
+    rockvol=   "ftp://dbftp.essc.psu.edu/pub/data/1997-0005/rockvol.bsq.gz",
     perm=      "ftp://dbftp.essc.psu.edu/pub/data/2000-0004/perm.bsq.gz",
     plast=     "ftp://dbftp.essc.psu.edu/pub/data/2000-0001/plast.bsq.gz")
 #+END_SRC
 
 
-#+BEGIN_SRC R :results raw
+#+BEGIN_SRC R :results silent
   downloadBsq <-  function( name= "clay") {
     system(
       paste(
@@ -439,7 +441,9 @@ These are the URLs for Albers Equal Area projection data in the
       intern= TRUE)
     sprintf( "data/albers/%s", basename( bsqUrls[[ name]]))
   }
-    
+#+END_SRC
+
+#+BEGIN_SRC R :results raw
   bsqFiles <-
     foreach( name= names( bsqUrls)) %dopar% {
       downloadBsq( name)}
@@ -461,8 +465,12 @@ These are the URLs for Albers Equal Area projection data in the
 - ph :: data/albers/ph.bsq.gz
 - hsgpct :: data/albers/hsgpct.bsq.gz
 - rockdepm :: data/albers/rockdepm.bsq.gz
+- rockvol :: data/albers/rockvol.bsq.gz
 - perm :: data/albers/perm.bsq.gz
 - plast :: data/albers/plast.bsq.gz
+
+
+*** COMMENT This worked for the simple cases
 
 #+BEGIN_SRC R
   ## clayBsqCon <- gzfile( bsqFiles[[ "clay"]], open= "rb")
@@ -501,20 +509,185 @@ These are the URLs for Albers Equal Area projection data in the
 #+END_SRC
 
 #+BEGIN_SRC R
-  psuBricks <- llply( bsqFiles, brickFromBsq, .parallel= TRUE)
+  psuBricks <- llply( bsqFiles[ c( "clay", "silt", "sand")], brickFromBsq, .parallel= TRUE)
 #+END_SRC
 
 #+BEGIN_SRC R
   ascii(
     llply( psuBricks, filename),
     list.type= "label")
-  
 #+END_SRC
 
 #+RESULTS:
 : - clay :: /project/joshuaelliott/conus-soil/output/albers/clay.tif
 : - sand :: /project/joshuaelliott/conus-soil/output/albers/sand.tif
 : - silt :: /project/joshuaelliott/conus-soil/output/albers/silt.tif
+
+
+*** Not all arrays have same structure
+
+#+BEGIN_SRC R :results raw
+  
+  bsqVars <- list(
+    clay=      "clay fraction",
+    sand=      "sand fraction",
+    silt=      "silt fraction",
+    bd=        "bulk density",
+    awc=       "available water capacity",
+    kfact=     "surface erodibility factor",
+    layertext= "texture class",
+    domfrag=   "dominant fragment class",
+    poros=     "porosity",
+    ph=        "pH",
+    hsgpct=    "hydrologic soil group fraction",
+    rockdepm=  "depth to bedrock",
+    rockvol=   "rock fragment volume",
+    perm=      "permeability rate",
+    plast=     "plasticity")
+  
+  bsqDf <-
+    data.frame(
+      name= unlist( bsqVars), 
+      file= unlist( bsqFiles),
+      layers= "1:11",
+      bytes= 1,
+      signed= FALSE,
+      scale= 1,
+      units= NA,
+      stringsAsFactors= FALSE)
+  
+  bsqDf[ c( "kfact", "perm", "bd", "poros"), "scale"] <- 100 
+  bsqDf[ "ph", "scale"] <- 10
+  
+  bsqDf[ "kffact",] <- bsqDf[ "kfact",]
+  bsqDf[ "kffact", "name"] <- "surface erodibility factor, adjusted"
+  bsqDf[ "kfact", "layers"] <- "seq( 1, 21, by=2)"
+  bsqDf[ "kffact", "layers"] <- "seq( 2, 22, by=2)"
+  
+  bsqDf[ "hsgpct", "layers"] <- "1:5"
+  bsqDf[ "awc", "layers"] <- "1:3"
+  
+  bsqDf[ c("clay", "silt", "sand", "poros", "hsgpct", "rockvol", "plast"), "units"] <- "%"
+  bsqDf[ "rockdepm", "units"] <- "cm"
+  bsqDf[ "perm", "units"] <- "cm hr**-1"
+  bsqDf[ "bd", "units"] <- "kg m**-3"
+  bsqDf[ "awc", "units"] <- "?"
+  bsqDf[ c( "layertext", "domfrag"), "units"] <- "code"
+  
+  bsqDf[ c( "perm", "bd"), "bytes"] <- 2
+  
+  bsqDf <- bsqDf[ c( 1:6, nrow( bsqDf), 7:( nrow( bsqDf) -1)), ] 
+  
+  ascii( bsqDf, digits= 0)
+#+END_SRC
+
+#+RESULTS:
+|           | name                                 | file                         |            layers | bytes | signed | scale | units     |
+|-----------+--------------------------------------+------------------------------+-------------------+-------+--------+-------+-----------|
+| clay      | clay fraction                        | data/albers/clay.bsq.gz      |              1:11 |     1 | FALSE  |     1 | %         |
+| sand      | sand fraction                        | data/albers/sand.bsq.gz      |              1:11 |     1 | FALSE  |     1 | %         |
+| silt      | silt fraction                        | data/albers/silt.bsq.gz      |              1:11 |     1 | FALSE  |     1 | %         |
+| bd        | bulk density                         | data/albers/bd.bsq.gz        |              1:11 |     2 | FALSE  |   100 | kg m**-3  |
+| awc       | available water capacity             | data/albers/awc.bsq.gz       |               1:3 |     1 | FALSE  |     1 | ?         |
+| kfact     | surface erodibility factor           | data/albers/kfact.bsq.gz     | seq( 1, 21, by=2) |     1 | FALSE  |   100 |           |
+| kffact    | surface erodibility factor, adjusted | data/albers/kfact.bsq.gz     | seq( 2, 22, by=2) |     1 | FALSE  |   100 |           |
+| layertext | texture class                        | data/albers/layertext.bsq.gz |              1:11 |     1 | FALSE  |     1 | code      |
+| domfrag   | dominant fragment class              | data/albers/domfrag.bsq.gz   |              1:11 |     1 | FALSE  |     1 | code      |
+| poros     | porosity                             | data/albers/poros.bsq.gz     |              1:11 |     1 | FALSE  |   100 | %         |
+| ph        | pH                                   | data/albers/ph.bsq.gz        |              1:11 |     1 | FALSE  |    10 |           |
+| hsgpct    | hydrologic soil group fraction       | data/albers/hsgpct.bsq.gz    |               1:5 |     1 | FALSE  |     1 | %         |
+| rockdepm  | depth to bedrock                     | data/albers/rockdepm.bsq.gz  |              1:11 |     1 | FALSE  |     1 | cm        |
+| rockvol   | rock fragment volume                 | data/albers/rockvol.bsq.gz   |              1:11 |     1 | FALSE  |     1 | %         |
+| perm      | permeability rate                    | data/albers/perm.bsq.gz      |              1:11 |     2 | FALSE  |   100 | cm hr**-1 |
+| plast     | plasticity                           | data/albers/plast.bsq.gz     |              1:11 |     1 | FALSE  |     1 | %         |
+
+
+** Convert to GeoTIFFs
+
+#+BEGIN_SRC R
+  brickFromBsqDf <- function( df) {
+    ## with( df, {
+    attach( df)
+    layers <- eval( parse( text= layers))
+    thisBrick <-
+      brick(
+        albers,
+        values= FALSE,
+        datatype= ifelse( scale > 1, "FLT4S", "INT1U"))
+    dim( thisBrick) <-
+      c( dim( thisBrick)[ 1:2], length( layers))
+    inputArrayDim <-
+      c( dim( thisBrick)[ 1:2],
+        length( layers) * ifelse( str_detect( file, "kfact"), 2, 1))
+    con <-
+      gzfile( file, open= "rb")
+    thisArray <-
+      array( 
+        readBin(
+          con,
+          what= "integer", size= bytes, signed= signed,
+          n= prod( inputArrayDim)),
+        dim= inputArrayDim)
+    thisBrick[] <- thisArray[ , , layers]
+    close( con)
+    ## varName <-
+    ##   ## str_match(
+    ##   ##   basename( file),
+    ##   ##   "^[^\\.]+")
+    ##   rownames( df)
+    if( scale > 1) {
+      thisBrick <- scale(
+        thisBrick,
+        center= FALSE,
+        scale= rep( scale, length( layers)))}
+    thisBrick <-
+      mask(
+        thisBrick,
+        mask= albers,
+        filename= sprintf( "output/albers/%s.tif", .rownames),
+        datatype= dataType( thisBrick))        
+    names( thisBrick) <-
+      sprintf( "%s.%d", .rownames, 1:length( layers))
+    detach( df)
+    thisBrick
+    ## })
+  }
+#+END_SRC
+
+#+BEGIN_SRC R :results silent
+  psuBricks <-
+    dlply(
+      .data= name_rows( bsqDf),
+      .variables= .(.rownames),
+      .fun= brickFromBsqDf,
+      .parallel= FALSE)
+#+END_SRC
+
+#+BEGIN_SRC R
+  ascii(
+    llply( psuBricks, filename),
+    list.type= "label")
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+ - awc :: /project/joshuaelliott/conus-soil/output/albers/awc.tif
+- bd :: /project/joshuaelliott/conus-soil/output/albers/bd.tif
+- clay :: /project/joshuaelliott/conus-soil/output/albers/clay.tif
+- domfrag :: /project/joshuaelliott/conus-soil/output/albers/domfrag.tif
+- hsgpct :: /project/joshuaelliott/conus-soil/output/albers/hsgpct.tif
+- kfact :: /project/joshuaelliott/conus-soil/output/albers/kfact.tif
+- kffact :: /project/joshuaelliott/conus-soil/output/albers/kffact.tif
+- layertext :: /project/joshuaelliott/conus-soil/output/albers/layertext.tif
+- perm :: /project/joshuaelliott/conus-soil/output/albers/perm.tif
+- ph :: /project/joshuaelliott/conus-soil/output/albers/ph.tif
+- plast :: /project/joshuaelliott/conus-soil/output/albers/plast.tif
+- poros :: /project/joshuaelliott/conus-soil/output/albers/poros.tif
+- rockdepm :: /project/joshuaelliott/conus-soil/output/albers/rockdepm.tif
+- rockvol :: /project/joshuaelliott/conus-soil/output/albers/rockvol.tif
+- sand :: /project/joshuaelliott/conus-soil/output/albers/sand.tif
+- silt :: /project/joshuaelliott/conus-soil/output/albers/silt.tif
+#+end_example
 
 
 ** Check the results of the soil fractions (clay, sand, silt)
@@ -530,9 +703,9 @@ These are the URLs for Albers Equal Area projection data in the
 : extent      : -2357000, 2259000, 277000, 3173000  (xmin, xmax, ymin, ymax)
 : coord. ref. : +proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
 : data source : /project/joshuaelliott/conus-soil/output/albers/clay.tif 
-: names       : layer.1, layer.2, layer.3, layer.4, layer.5, layer.6, layer.7, layer.8, layer.9, layer.10, layer.11 
-: min values  :       0,       0,       0,       0,       0,       0,       0,       0,       0,        0,        0 
-: max values  :      58,      58,      58,      58,      58,      58,      58,      58,      58,       58,       58
+: names       : clay.1, clay.2, clay.3, clay.4, clay.5, clay.6, clay.7, clay.8, clay.9, clay.10, clay.11 
+: min values  :      0,      0,      0,      0,      0,      0,      0,      0,      0,       0,       0 
+: max values  :     58,     58,     58,     58,     58,     58,     58,     58,     58,      58,      58
 
 Why are all of the maxima equal?
 
@@ -672,7 +845,7 @@ Why are all of the maxima equal?
  | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
 
 #+BEGIN_SRC R :results raw
-  ## psuTotalFreqs <- freq( psuTotalFracs, merge= TRUE)
+  psuTotalFreqs <- freq( psuTotalFracs, merge= TRUE)
   ascii(
     psuTotalFreqs,
     include.rownames= FALSE,
@@ -692,12 +865,128 @@ Why are all of the maxima equal?
 
 ** TODO Check the dimensions of the kfact variable
 
+
 ** TODO Incorporate look-up of texture classes
-#+BEGIN_SRC R
+#+BEGIN_SRC R :eval no
 list(
 layertext= "ftp://dbftp.essc.psu.edu/pub/data/1995-0792/textclass.ascii",
 domfrag="ftp://dbftp.essc.psu.edu/pub/data/1997-0004/fragclass.ascii",
 
-
+hsgpct= c( "A", "B", "C", "D", "W")
+awc= c( "100 cm", "150 cm", "250 cm")
 #+END_SRC
 
+
+* Calculate weights from NLCD crop class
+  :PROPERTIES:
+  :session:  *grass*
+  :END:
+
+#+BEGIN_SRC sh :results silent
+  module add grass
+  grass64 -text blox/nlcd/data/grass/nlcd/PERMANENT
+  export GRASS_MESSAGE_FORMAT=plain
+#+END_SRC
+
+** TODO write emacs-lisp to start a new *grass* shell
+
+** Import a soil raster in order to set region
+
+#+BEGIN_SRC sh :results silent
+  r.in.gdal input=output/albers/clay.tif output=clay band=1
+#+END_SRC
+
+
+** Mask the crop pixels with ones
+
+#+BEGIN_SRC sh :results silent
+  g.region -d
+  r.reclass --overwrite input=nlcd2006 output=crop <<END
+  82 = 1
+  * = 0
+  END  
+#+END_SRC
+
+
+** Count 30 m crop pixels in each 1 km soil pixel
+
+#+BEGIN_SRC sh
+  g.region -p rast=clay.1
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+projection: 99 (Albers Equal Area)
+zone:       0
+datum:      nad83
+ellipsoid:  grs80
+north:      3173000
+south:      277000
+west:       -2357000
+east:       2259000
+nsres:      1000
+ewres:      1000
+rows:       2896
+cols:       4616
+cells:      13367936
+#+end_example
+
+#+BEGIN_SRC sh :results silent
+  r.resamp.stats --overwrite -w input=crop output=cropFreq method=sum
+  r.out.gdal input=cropFreq output=output/albers/cropFreq.tif type=Float32 
+#+END_SRC
+
+
+* Reproject the geographic grid to the soil raster
+
+#+BEGIN_SRC R
+  world <- raster()
+  res( world) <- 5/60
+  world[] <- 1:ncell( world)
+  world
+  
+  albersCells <- projectRaster(
+    from= world,
+    to= psuBricks$clay,
+    method= "ngb",
+    filename= "output/albers/albersCells.tif",
+    datatype= "INT4U",
+    overwrite= TRUE)
+  albersCells
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+class       : RasterLayer 
+dimensions  : 2160, 4320, 9331200  (nrow, ncol, ncell)
+resolution  : 0.08333333, 0.08333333  (x, y)
+extent      : -180, 180, -90, 90  (xmin, xmax, ymin, ymax)
+coord. ref. : +proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0 
+data source : in memory
+names       : layer 
+values      : 1, 9331200  (min, max)
+class       : RasterLayer 
+dimensions  : 2896, 4616, 13367936  (nrow, ncol, ncell)
+resolution  : 1000, 1000  (x, y)
+extent      : -2357000, 2259000, 277000, 3173000  (xmin, xmax, ymin, ymax)
+coord. ref. : +proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+data source : /project/joshuaelliott/conus-soil/output/albers/albersCells.tif 
+names       : albersCells 
+values      : 1988179, 3474018  (min, max)
+#+end_example
+
+
+* Collate the cell IDs, values, and weights
+
+#+BEGIN_SRC R
+  library( data.table)
+  
+  collateStack <- stack(
+    albersCells,
+    subset( psuBricks$clay, 1),
+    raster( "output/albers/cropFreq.tif"))
+  
+  collateDt <- data.table( collateStack[])
+  
+  setkey( collateDt, albersCells)
+#+END_SRC
