@@ -3,7 +3,7 @@
 
 * Initialize R
 
-#+BEGIN_SRC R
+#+BEGIN_SRC R :results silent
   library( ascii)
   options( asciiType= "org")
   
@@ -12,28 +12,11 @@
   
   library( raster)
   rasterOptions( overwrite= TRUE, progress= "", datatype= "INT1U")
-  rasterOptions()
   
   library( stringr)
+  library( plyr)
+  library( data.table)
 #+END_SRC
-
-#+RESULTS:
-#+begin_example
-format        : raster 
-datatype      : INT1U 
-overwrite     : TRUE 
-progress      : text 
-timer         : FALSE 
-chunksize     : 1e+07 
-maxmemory     : 1e+08 
-tmpdir        : /tmp/R_raster_tmp/nbest/ 
-tmptime       : 168 
-setfileext    : TRUE 
-tolerance     : 0.1 
-standardnames : TRUE 
-warn depracat.: TRUE
-#+end_example
-
 
 * Geographic coordinates					   :noexport:
 
@@ -314,7 +297,7 @@ provided by the Soil Info web site it is still necessary to extract
 the extent from one of those files in order to properly georeference
 the binay band-sequential data provided.
 
-#+BEGIN_SRC sh
+#+BEGIN_SRC sh :session
   cd data/albers
   wget --no-clobber \
     ftp://dbftp.essc.psu.edu/pub/data/1997-0006/fractgrid.e00.gz
@@ -327,14 +310,22 @@ the binay band-sequential data provided.
 #+END_SRC
 
 #+RESULTS:
-: class       : RasterLayer 
-: dimensions  : 2896, 4616, 13367936  (nrow, ncol, ncell)
-: resolution  : 1000, 1000  (x, y)
-: extent      : -2357000, 2259000, 277000, 3173000  (xmin, xmax, ymin, ymax)
-: coord. ref. : +proj=aea +lat_1=0 +lat_2=29.5 +lat_0=45.5 +lon_0=0 +x_0=0 +y_0=-96 +datum=NAD27 +units=m +no_defs +ellps=clrk66 +nadgrids=@conus,@alaska,@ntv2_0.gsb,@ntv1_can.dat 
-: data source : /project/joshuaelliott/conus-soil/data/albers/fractgrid.e00 
-: names       : fractgrid 
-: values      : 1, 10500  (min, max)
+#+begin_example
+rgdal: version: 0.8.1, (SVN revision 415)
+Geospatial Data Abstraction Library extensions to R successfully loaded
+Loaded GDAL runtime: GDAL 1.9.2, released 2012/10/08
+Path to GDAL shared files: /software/gdal-1.9-el6-x86_64/share/gdal
+Loaded PROJ.4 runtime: Rel. 4.8.0, 6 March 2012, [PJ_VERSION: 480]
+Path to PROJ.4 shared files: (autodetected)
+class       : RasterLayer 
+dimensions  : 2896, 4616, 13367936  (nrow, ncol, ncell)
+resolution  : 1000, 1000  (x, y)
+extent      : -2357000, 2259000, 277000, 3173000  (xmin, xmax, ymin, ymax)
+coord. ref. : +proj=aea +lat_1=0 +lat_2=29.5 +lat_0=45.5 +lon_0=0 +x_0=0 +y_0=-96 +datum=NAD27 +units=m +no_defs +ellps=clrk66 +nadgrids=@conus,@alaska,@ntv2_0.gsb,@ntv1_can.dat 
+data source : /project/joshuaelliott/conus-soil/data/albers/fractgrid.e00 
+names       : fractgrid 
+values      : 1, 10500  (min, max)
+#+end_example
 
 
 ** Compare projection of NLCD data
@@ -569,6 +560,7 @@ These are the URLs for Albers Equal Area projection data in the
   
   bsqDf[ c("clay", "silt", "sand", "poros", "hsgpct", "rockvol", "plast"), "units"] <- "%"
   bsqDf[ "rockdepm", "units"] <- "cm"
+  bsqDf[ "rockdepm", "layers"] <- 1
   bsqDf[ "perm", "units"] <- "cm hr**-1"
   bsqDf[ "bd", "units"] <- "kg m**-3"
   bsqDf[ "awc", "units"] <- "?"
@@ -596,65 +588,124 @@ These are the URLs for Albers Equal Area projection data in the
 | poros     | porosity                             | data/albers/poros.bsq.gz     |              1:11 |     1 | FALSE  |   100 | %         |
 | ph        | pH                                   | data/albers/ph.bsq.gz        |              1:11 |     1 | FALSE  |    10 |           |
 | hsgpct    | hydrologic soil group fraction       | data/albers/hsgpct.bsq.gz    |               1:5 |     1 | FALSE  |     1 | %         |
-| rockdepm  | depth to bedrock                     | data/albers/rockdepm.bsq.gz  |              1:11 |     1 | FALSE  |     1 | cm        |
+| rockdepm  | depth to bedrock                     | data/albers/rockdepm.bsq.gz  |                 1 |     1 | FALSE  |     1 | cm        |
 | rockvol   | rock fragment volume                 | data/albers/rockvol.bsq.gz   |              1:11 |     1 | FALSE  |     1 | %         |
 | perm      | permeability rate                    | data/albers/perm.bsq.gz      |              1:11 |     2 | FALSE  |   100 | cm hr**-1 |
 | plast     | plasticity                           | data/albers/plast.bsq.gz     |              1:11 |     1 | FALSE  |     1 | %         |
 
 
+
 ** Convert to GeoTIFFs
 
 #+BEGIN_SRC R
-  brickFromBsqDf <- function( df) {
-    ## with( df, {
-    attach( df)
-    layers <- eval( parse( text= layers))
-    thisBrick <-
-      brick(
-        albers,
-        values= FALSE,
-        datatype= ifelse( scale > 1, "FLT4S", "INT1U"))
-    dim( thisBrick) <-
-      c( dim( thisBrick)[ 1:2], length( layers))
-    inputArrayDim <-
-      c( dim( thisBrick)[ 1:2],
-        length( layers) * ifelse( str_detect( file, "kfact"), 2, 1))
-    con <-
-      gzfile( file, open= "rb")
-    thisArray <-
-      array( 
-        readBin(
-          con,
-          what= "integer", size= bytes, signed= signed,
-          n= prod( inputArrayDim)),
-        dim= inputArrayDim)
-    thisBrick[] <- thisArray[ , , layers]
-    close( con)
-    ## varName <-
-    ##   ## str_match(
-    ##   ##   basename( file),
-    ##   ##   "^[^\\.]+")
-    ##   rownames( df)
-    if( scale > 1) {
-      thisBrick <- scale(
-        thisBrick,
-        center= FALSE,
-        scale= rep( scale, length( layers)))}
-    thisBrick <-
-      mask(
-        thisBrick,
-        mask= albers,
-        filename= sprintf( "output/albers/%s.tif", .rownames),
-        datatype= dataType( thisBrick))        
-    names( thisBrick) <-
-      sprintf( "%s.%d", .rownames, 1:length( layers))
-    detach( df)
+  ## bsqDfWithFunction <- function() {
+  ##   layers <- eval( parse( text= layers))
+  ##   thisBrick <-
+  ##     brick(
+  ##       albers,
+  ##       values= FALSE,
+  ##       datatype= ifelse( scale > 1, "FLT4S", "INT1U"))
+  ##   dim( thisBrick) <-
+  ##     c( dim( thisBrick)[ 1:2], length( layers))
+  ##   inputArrayDim <-
+  ##     c( dim( thisBrick)[ 1:2],
+  ##       length( layers) * ifelse( str_detect( file, "kfact"), 2, 1))
+  ##   con <-
+  ##     gzfile( file, open= "rb")
+  ##   thisArray <-
+  ##     array( 
+  ##       readBin(
+  ##         con,
+  ##         what= "integer", size= bytes, signed= signed,
+  ##         n= prod( inputArrayDim)),
+  ##       dim= inputArrayDim)
+  ##   thisBrick[] <- thisArray[ , , layers]
+  ##   close( con)
+  ##   ## varName <-
+  ##   ##   ## str_match(
+  ##   ##   ##   basename( file),
+  ##   ##   ##   "^[^\\.]+")
+  ##   ##   rownames( df)
+  ##   if( scale > 1) {
+  ##     thisBrick <- scale(
+  ##       thisBrick,
+  ##       center= FALSE,
+  ##       scale= rep( scale, length( layers)))}
+  ##   thisBrick <-
+  ##     mask(
+  ##       thisBrick,
+  ##       mask= albers,
+  ##       filename= fn,
+  ##       overwrite= TRUE,
+  ##       datatype= dataType( thisBrick))        
+  ##   names( thisBrick) <-
+  ##     sprintf( "%s.%d", .rownames, 1:length( layers))
+  ## }
+  
+  ## brickFromBsqDf <- function( df, overwrite= FALSE) {
+  ##   fn <- sprintf( "output/albers/%s.tif", df$.rownames)
+  ##   if( overwrite) with( df, bsqDfWithFunction()) else thisBrick <- brick( fn)
+  ##   thisBrick
+  ## }
+  
+  brickFromBsqDf <- function( df, overwrite= FALSE) {
+    fn <- sprintf( "output/albers/%s.tif", df$.rownames)
+    if( overwrite) {
+      layers <- eval( parse( text= df$layers))
+      thisBrick <-
+        brick(
+          albers,
+          values= FALSE,
+          datatype= ifelse( df$scale > 1, "FLT4S", "INT1U"))
+      dim( thisBrick) <-
+        c( dim( thisBrick)[ 1:2], length( layers))
+      inputArrayDim <-
+        c( dim( thisBrick)[ 1:2],
+          length( layers) * ifelse( str_detect( df$file, "kfact"), 2, 1))
+      con <-
+        gzfile( df$file, open= "rb")
+      thisArray <-
+        array( 
+          readBin(
+            con,
+            what= "integer", size= df$bytes, signed= df$signed,
+            n= prod( inputArrayDim)),
+          dim= inputArrayDim)
+      close( con)
+      if( length( layers) > 1) {
+        thisBrick[] <- thisArray[ , , layers]
+      } else {
+        thisBrick[] <- thisArray
+      }
+      ## varName <-
+      ##   ## str_match(
+      ##   ##   basename( file),
+      ##   ##   "^[^\\.]+")
+      ##   rownames( df)
+      if( df$scale > 1) {
+        thisBrick <- scale(
+          thisBrick,
+          center= FALSE,
+          scale= rep( df$scale, length( layers)))}
+      thisBrick <-
+        mask(
+          thisBrick,
+          mask= albers,
+          filename= fn,
+          overwrite= TRUE,
+          datatype= dataType( thisBrick))        
+      names( thisBrick) <-
+        sprintf( "%s.%d", df$.rownames, 1:length( layers))
+    } else thisBrick <- brick( fn)
     thisBrick
-    ## })
   }
 #+END_SRC
 
-#+BEGIN_SRC R :results silent
+#+RESULTS:
+
+*** All of the variables
+
+#+BEGIN_SRC R :results silent :eval no
   psuBricks <-
     dlply(
       .data= name_rows( bsqDf),
@@ -663,6 +714,15 @@ These are the URLs for Albers Equal Area projection data in the
       .parallel= FALSE)
 #+END_SRC
 
+*** Ony depth to bedrock
+
+#+BEGIN_SRC R :results silent
+  psuBricks <- list( rockdepm= brickFromBsqDf( name_rows( bsqDf[ "rockdepm",]), TRUE))
+#+END_SRC
+
+
+** File names of results
+
 #+BEGIN_SRC R
   ascii(
     llply( psuBricks, filename),
@@ -670,24 +730,7 @@ These are the URLs for Albers Equal Area projection data in the
 #+END_SRC
 
 #+RESULTS:
-#+begin_example
- - awc :: /project/joshuaelliott/conus-soil/output/albers/awc.tif
-- bd :: /project/joshuaelliott/conus-soil/output/albers/bd.tif
-- clay :: /project/joshuaelliott/conus-soil/output/albers/clay.tif
-- domfrag :: /project/joshuaelliott/conus-soil/output/albers/domfrag.tif
-- hsgpct :: /project/joshuaelliott/conus-soil/output/albers/hsgpct.tif
-- kfact :: /project/joshuaelliott/conus-soil/output/albers/kfact.tif
-- kffact :: /project/joshuaelliott/conus-soil/output/albers/kffact.tif
-- layertext :: /project/joshuaelliott/conus-soil/output/albers/layertext.tif
-- perm :: /project/joshuaelliott/conus-soil/output/albers/perm.tif
-- ph :: /project/joshuaelliott/conus-soil/output/albers/ph.tif
-- plast :: /project/joshuaelliott/conus-soil/output/albers/plast.tif
-- poros :: /project/joshuaelliott/conus-soil/output/albers/poros.tif
-- rockdepm :: /project/joshuaelliott/conus-soil/output/albers/rockdepm.tif
-- rockvol :: /project/joshuaelliott/conus-soil/output/albers/rockvol.tif
-- sand :: /project/joshuaelliott/conus-soil/output/albers/sand.tif
-- silt :: /project/joshuaelliott/conus-soil/output/albers/silt.tif
-#+end_example
+:  - rockdepm :: /project/joshuaelliott/conus-soil/output/albers/rockdepm.tif
 
 
 ** Check the results of the soil fractions (clay, sand, silt)
@@ -890,6 +933,7 @@ awc= c( "100 cm", "150 cm", "250 cm")
 
 ** TODO write emacs-lisp to start a new *grass* shell
 
+
 ** Import a soil raster in order to set region
 
 #+BEGIN_SRC sh :results silent
@@ -936,6 +980,63 @@ cells:      13367936
   r.out.gdal input=cropFreq output=output/albers/cropFreq.tif type=Float32 
 #+END_SRC
 
+#+BEGIN_SRC sh :session
+  gdalinfo output/albers/cropFreq.tif
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+Driver: GTiff/GeoTIFF
+Files: output/albers/cropFreq.tif
+       output/albers/cropFreq.tif.aux.xml
+Size is 4616, 2896
+Coordinate System is:
+PROJCS["Albers Equal Area",
+    GEOGCS["NAD83",
+        DATUM["North_American_Datum_1983",
+            SPHEROID["GRS 1980",6378137,298.2572221010002,
+                AUTHORITY["EPSG","7019"]],
+            TOWGS84[0,0,0,0,0,0,0],
+            AUTHORITY["EPSG","6269"]],
+        PRIMEM["Greenwich",0],
+        UNIT["degree",0.0174532925199433],
+        AUTHORITY["EPSG","4269"]],
+    PROJECTION["Albers_Conic_Equal_Area"],
+    PARAMETER["standard_parallel_1",29.5],
+    PARAMETER["standard_parallel_2",45.5],
+    PARAMETER["latitude_of_center",23],
+    PARAMETER["longitude_of_center",-96],
+    PARAMETER["false_easting",0],
+    PARAMETER["false_northing",0],
+    UNIT["metre",1,
+        AUTHORITY["EPSG","9001"]]]
+Origin = (-2357000.000000000000000,3173000.000000000000000)
+Pixel Size = (1000.000000000000000,-1000.000000000000000)
+Metadata:
+  AREA_OR_POINT=Area
+Image Structure Metadata:
+  INTERLEAVE=BAND
+Corner Coordinates:
+Upper Left  (-2357000.000, 3173000.000) (127d54' 1.04"W, 47d57'32.71"N)
+Lower Left  (-2357000.000,  277000.000) (118d45'41.78"W, 22d56'20.60"N)
+Upper Right ( 2259000.000, 3173000.000) ( 65d20' 2.97"W, 48d14'47.35"N)
+Lower Right ( 2259000.000,  277000.000) ( 74d 9' 4.00"W, 23d 8'55.49"N)
+Center      (  -49000.000, 1725000.000) ( 96d34' 3.37"W, 38d33'12.26"N)
+Band 1 Block=4616x1 Type=Float32, ColorInterp=Gray
+  Min=0.028 Max=1111.111 
+  Minimum=0.028, Maximum=1111.111, Mean=487.024, StdDev=378.298
+  Metadata:
+    COLOR_TABLE_RULE_RGB_0=2.777778e-02 2.222444e+02 255 255 0 0 255 0
+    COLOR_TABLE_RULE_RGB_1=2.222444e+02 4.444611e+02 0 255 0 0 255 255
+    COLOR_TABLE_RULE_RGB_2=4.444611e+02 6.666778e+02 0 255 255 0 0 255
+    COLOR_TABLE_RULE_RGB_3=6.666778e+02 8.888944e+02 0 0 255 255 0 255
+    COLOR_TABLE_RULE_RGB_4=8.888944e+02 1.111111e+03 255 0 255 255 0 0
+    COLOR_TABLE_RULES_COUNT=5
+    STATISTICS_MAXIMUM=1111.1110839844
+    STATISTICS_MEAN=487.02440326863
+    STATISTICS_MINIMUM=0.027777777984738
+    STATISTICS_STDDEV=378.29797760502
+#+end_example
 
 * Reproject the geographic grid to the soil raster
 
@@ -945,13 +1046,16 @@ cells:      13367936
   world[] <- 1:ncell( world)
   world
   
-  albersCells <- projectRaster(
-    from= world,
-    to= psuBricks$clay,
-    method= "ngb",
-    filename= "output/albers/albersCells.tif",
-    datatype= "INT4U",
-    overwrite= TRUE)
+  ## albersCells <- projectRaster(
+  ##   from= world,
+  ##   to= psuBricks$clay,
+  ##   method= "ngb",
+  ##   filename= "output/albers/albersCells.tif",
+  ##   datatype= "INT4U",
+  ##   overwrite= TRUE)
+  
+  albersCells <- raster( "output/albers/albersCells.tif")
+  
   albersCells
 #+END_SRC
 
@@ -979,14 +1083,215 @@ values      : 1988179, 3474018  (min, max)
 * Collate the cell IDs, values, and weights
 
 #+BEGIN_SRC R
-  library( data.table)
-  
-  collateStack <- stack(
+  rockdepmStack <- stack(
     albersCells,
-    subset( psuBricks$clay, 1),
+    ## psuBricks$rockdepm,
+    raster( "output/albers/rockdepm.tif"),
     raster( "output/albers/cropFreq.tif"))
+  names( rockdepmStack) <- c( "cell", "rockdepm", "cropFreq")
   
-  collateDt <- data.table( collateStack[])
+  rockdepmDt <- data.table( rockdepmStack[])
+  setkey( rockdepmDt, cell)
   
-  setkey( collateDt, albersCells)
+  conusCells <- `[`(
+    x= rockdepmDt,
+    j= list(
+      hasConus= length( which( !is.na( rockdepm))) > 1),
+    keyby= cell)
+  
+  rockdepmDt <- `[`(
+    x= `[`(
+      x= rockdepmDt,
+      i= conusCells[ I( hasConus),]),
+    j= list(
+      rockdepmCrop= weighted.mean(
+        rockdepm,
+        w= cropFreq,
+        na.rm= TRUE),
+      rockdepmAll=  mean(
+        rockdepm,
+        na.rm= TRUE)),
+    by= cell)
+  
+  rockdepmDt <- `[`(
+    x= rockdepmDt,
+    i= is.nan( rockdepmCrop),
+    rockdepmCrop := 0)
+  
+  rockdepmAll <- raster( world)
+  rockdepmAll[ rockdepmDt$cell] <- rockdepmDt$rockdepmAll
+  rockdepmCrop <- raster( world)
+  rockdepmCrop[ rockdepmDt$cell] <- rockdepmDt$rockdepmCrop
+  
+  rockdepmAll <- trim(
+    rockdepmAll,
+    filename= "output/rockdepmAll.tif",
+    overwrite= TRUE)
+  
+  rockdepmCrop <- crop(
+    rockdepmCrop,
+    rockdepmAll,
+    filename= "output/rockdepmCrop.tif",
+    overwrite= TRUE)  
 #+END_SRC
+
+* Convert the results to netCDF
+
+** Mean of all CONUS-Soil pixels
+
+#+BEGIN_SRC sh :session
+  gdal_translate -of netCDF \
+      -co "FORMAT=NC4" \
+      -co "COMPRESS=DEFLATE" \
+      -co "ZLEVEL=5" \
+      output/rockdepmAll.tif output/rockdepmAll.nc4
+#+END_SRC
+
+#+RESULTS:
+: Input file size is 694, 299
+: 0...10...20...30...40...50...60...70...80...90...100 - done.
+
+#+BEGIN_SRC sh :session
+  ncdump -h output/rockdepmAll.nc4
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+netcdf rockdepmAll {
+dimensions:
+	lon = 694 ;
+	lat = 299 ;
+variables:
+	float Band1(lat, lon) ;
+		Band1:long_name = "GDAL Band Number 1" ;
+		Band1:_FillValue = -3.4e+38f ;
+		Band1:grid_mapping = "crs" ;
+		Band1:coordinates = "lon lat" ;
+	char crs ;
+		crs:grid_mapping_name = "latitude_longitude" ;
+		crs:longitude_of_prime_meridian = 0. ;
+		crs:semi_major_axis = 6378137. ;
+		crs:inverse_flattening = 298.257223563 ;
+		crs:spatial_ref = "GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0],UNIT[\"degree\",0.0174532925199433],AUTHORITY[\"EPSG\",\"4326\"]]" ;
+		crs:GeoTransform = "-124.75 0.08333333333333333 0 49.41666666666666 0 -0.08333333333333333 " ;
+	double lat(lat) ;
+		lat:standard_name = "latitude" ;
+		lat:long_name = "latitude" ;
+		lat:units = "degrees_north" ;
+	double lon(lon) ;
+		lon:standard_name = "longitude" ;
+		lon:long_name = "longitude" ;
+		lon:units = "degrees_east" ;
+
+// global attributes:
+		:GDAL_AREA_OR_POINT = "Area" ;
+		:Conventions = "CF-1.5" ;
+		:GDAL = "GDAL 1.9.2, released 2012/10/08" ;
+		:history = "Thu May 16 06:23:21 2013: GDAL CreateCopy( output/rockdepmAll.nc4, ... )" ;
+}
+#+end_example
+
+** Weighted mean of CONUS-Soil pixels according to NLCD crop frequency
+
+#+BEGIN_SRC sh :session
+  gdal_translate -of netCDF \
+      -co "FORMAT=NC4" \
+      -co "COMPRESS=DEFLATE" \
+      -co "ZLEVEL=5" \
+      output/rockdepmCrop.tif output/rockdepmCrop.nc4
+#+END_SRC
+
+#+RESULTS:
+: Input file size is 694, 299
+: 0...10...20...30...40...50...60...70...80...90...100 - done.
+
+#+BEGIN_SRC sh :session
+  ncdump -h output/rockdepmCrop.nc4
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+netcdf rockdepmCrop {
+dimensions:
+	lon = 694 ;
+	lat = 299 ;
+variables:
+	float Band1(lat, lon) ;
+		Band1:long_name = "GDAL Band Number 1" ;
+		Band1:_FillValue = -3.4e+38f ;
+		Band1:grid_mapping = "crs" ;
+		Band1:coordinates = "lon lat" ;
+	char crs ;
+		crs:grid_mapping_name = "latitude_longitude" ;
+		crs:longitude_of_prime_meridian = 0. ;
+		crs:semi_major_axis = 6378137. ;
+		crs:inverse_flattening = 298.257223563 ;
+		crs:spatial_ref = "GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0],UNIT[\"degree\",0.0174532925199433],AUTHORITY[\"EPSG\",\"4326\"]]" ;
+		crs:GeoTransform = "-124.75 0.08333333333333333 0 49.41666666666666 0 -0.08333333333333333 " ;
+	double lat(lat) ;
+		lat:standard_name = "latitude" ;
+		lat:long_name = "latitude" ;
+		lat:units = "degrees_north" ;
+	double lon(lon) ;
+		lon:standard_name = "longitude" ;
+		lon:long_name = "longitude" ;
+		lon:units = "degrees_east" ;
+
+// global attributes:
+		:GDAL_AREA_OR_POINT = "Area" ;
+		:Conventions = "CF-1.5" ;
+		:GDAL = "GDAL 1.9.2, released 2012/10/08" ;
+		:history = "Thu May 16 06:26:40 2013: GDAL CreateCopy( output/rockdepmCrop.nc4, ... )" ;
+}
+#+end_example
+
+** Combine the two variables
+
+#+BEGIN_SRC sh :session
+  cdo -f nc4 -z zip setname,rockdepmAll output/rockdepmAll.nc4 output/rockdepmAll_.nc4
+  cdo -f nc4 -z zip setname,rockdepmCrop output/rockdepmCrop.nc4 output/rockdepmCrop_.nc4
+  cdo -f nc4 -z zip merge output/rockdepmAll_.nc4 output/rockdepmCrop_.nc4 output/rockdepm.nc4
+  rm output/*_.nc4
+#+END_SRC
+
+#+RESULTS:
+
+
+#+BEGIN_SRC sh :session
+  ncdump -h output/rockdepm.nc4
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+netcdf rockdepm {
+dimensions:
+	lon = 694 ;
+	lat = 299 ;
+variables:
+	double lon(lon) ;
+		lon:standard_name = "longitude" ;
+		lon:long_name = "longitude" ;
+		lon:units = "degrees_east" ;
+		lon:axis = "X" ;
+	double lat(lat) ;
+		lat:standard_name = "latitude" ;
+		lat:long_name = "latitude" ;
+		lat:units = "degrees_north" ;
+		lat:axis = "Y" ;
+	float rockdepmAll(lat, lon) ;
+		rockdepmAll:long_name = "GDAL Band Number 1" ;
+		rockdepmAll:_FillValue = -3.4e+38f ;
+	float rockdepmCrop(lat, lon) ;
+		rockdepmCrop:long_name = "GDAL Band Number 1" ;
+		rockdepmCrop:_FillValue = -3.4e+38f ;
+
+// global attributes:
+		:CDI = "Climate Data Interface version 1.5.9 (http://code.zmaw.de/projects/cdi)" ;
+		:history = "Thu May 16 06:37:58 2013: cdo -f nc4 -z zip merge output/rockdepmAll_.nc4 output/rockdepmCrop_.nc4 output/rockdepm.nc4\nThu May 16 06:37:57 2013: cdo -f nc4 -z zip setname,rockdepmCrop output/rockdepmCrop.nc4 output/rockdepmCrop_.nc4\nThu May 16 06:26:40 2013: GDAL CreateCopy( output/rockdepmCrop.nc4, ... )" ;
+		:Conventions = "CF-1.5" ;
+		:GDAL_AREA_OR_POINT = "Area" ;
+		:GDAL = "GDAL 1.9.2, released 2012/10/08" ;
+		:CDO = "Climate Data Operators version 1.5.9rc1 (http://code.zmaw.de/projects/cdo)" ;
+}
+#+end_example
+
