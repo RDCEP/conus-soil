@@ -1038,6 +1038,7 @@ Band 1 Block=4616x1 Type=Float32, ColorInterp=Gray
     STATISTICS_STDDEV=378.29797760502
 #+end_example
 
+
 * Reproject the geographic grid to the soil raster
 
 #+BEGIN_SRC R
@@ -1080,7 +1081,7 @@ values      : 1988179, 3474018  (min, max)
 #+end_example
 
 
-* Collate the cell IDs, values, and weights
+* Collate the cell IDs, soil depth values, and weights
 
 #+BEGIN_SRC R
   rockdepmStack <- stack(
@@ -1134,6 +1135,93 @@ values      : 1988179, 3474018  (min, max)
     filename= "output/rockdepmCrop.tif",
     overwrite= TRUE)  
 #+END_SRC
+
+
+* Collate the cell IDs, weights, and multiple variables 
+
+#+BEGIN_SRC R
+  conusPixels <- raster( albersCells)
+  conusPixels[] <- 1:ncell( conusPixels)
+  
+  fractionStack <- stack(
+    conusPixels,
+    albersCells,
+    raster( "output/albers/cropFreq.tif"),
+    raster( "output/albers/clay.tif"),
+    raster( "output/albers/sand.tif"),
+    raster( "output/albers/silt.tif"))
+  names( fractionStack)[ 1:3] <- c( "pixel", "cell", "cropFreq")
+  
+  fractionDt <- data.table( fractionStack[], key= "pixel,cell")
+  ## setkey( fractionDt, cell)
+  fractionDt <- fractionDt[ conusCells[ I( hasConus)]]
+  fractionDt[, hasConus := NULL]
+  fractionDt[, total := sand + silt + clay]
+  fractionDt <- fractionDt[ !is.na( total)][ total > 0]
+  scaledFractionDt <- copy( fractionDt)
+  setkey( scaledFractionDt, pixel, cell)
+  scaledFractionDt <- scaledFractionDt[, lapply(
+    .SD, function( x) x*100/total), by= "pixel,cell"]
+  scaledFractionDt[, `:=`( cropFreq= NULL, total= NULL)]
+  
+  fractionDt <- fractionDt[, list( cell, cropFreq), key= cell][ scaledFractionDt]
+  
+  fractionDt <- fractionDt[ scaledFractionDt]
+  
+  sumCropFreq <- fractionDt[, list( crop= sum( cropFreq)), by= cell]
+  ## sumCropFreq <- sumCropFreq
+  
+  fractionCropDt <- fractionDt[, lapply(
+    .SD, weighted.mean, w= cropFreq, na.rm= TRUE), by= cell]
+  
+  fractionCropDt <- fractionCropDt[, cropFreq := NULL]
+  
+  fractionCropDt[ sumCropFreq[ crop == 0]] <-
+    fractionCropDt[ sumCropFreq[ crop == 0],
+                   lapply( .SD, function(x) 0)]
+  
+  
+  fractionAllDt <-  fractionDt[ total == 100, lapply(
+    .SD, mean, na.rm= TRUE), by= cell]
+  fractionAllDt[, cropFreq := NULL]
+  fractionAllDt[, total := sand + silt + clay]
+  
+  meanFractionDt <- `[`(
+    x= `[`(
+      x= fractionDt,
+      i= conusCells[ I( hasConus),]),
+    j= lapply(
+      .SD,
+      weighted.mean,
+      w= cropFreq,
+      na.rm= TRUE),
+      ## fractionAll=  mean(
+      ##   fraction,
+      ##   na.rm= TRUE)),
+    by= cell)
+  
+  fractionDt <- `[`(
+    x= fractionDt,
+    i= is.nan( fractionCrop),
+    fractionCrop := 0)
+  
+  fractionAll <- raster( world)
+  fractionAll[ fractionDt$cell] <- fractionDt$fractionAll
+  fractionCrop <- raster( world)
+  fractionCrop[ fractionDt$cell] <- fractionDt$fractionCrop
+  
+  fractionAll <- trim(
+    fractionAll,
+    filename= "output/fractionAll.tif",
+    overwrite= TRUE)
+  
+  fractionCrop <- crop(
+    fractionCrop,
+    fractionAll,
+    filename= "output/fractionCrop.tif",
+    overwrite= TRUE)  
+#+END_SRC
+
 
 * Convert the results to netCDF
 
