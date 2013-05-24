@@ -18,7 +18,9 @@
   library( data.table)
 #+END_SRC
 
+
 * Geographic coordinates					   :noexport:
+
 
 ** Correct invalid georeferencing
 
@@ -193,6 +195,7 @@ for loading raw data in the following sections.
 : names       : conusMask 
 : values      : 1, 1  (min, max)
 
+
 *** Check that the null value is properly set
 
 #+BEGIN_SRC sh :results output
@@ -204,6 +207,7 @@ for loading raw data in the following sections.
 
 
 ** Convert the band-sequential binary arrays to georeferenced rasters
+
 
 *** TODO Download and unpack the array
 
@@ -289,6 +293,7 @@ Is this real or does it indicate some kind of bug?
 
 
 * Albers equal area projection
+
 
 ** Extract georeferencing and mask from an Arc/INFO file.
 
@@ -393,6 +398,7 @@ That seems to fix the problem.
 
 
 ** Download and process the binary arrays
+
 
 *** Gather the URLs
 
@@ -1066,10 +1072,16 @@ class       : RasterLayer
 dimensions  : 2160, 4320, 9331200  (nrow, ncol, ncell)
 resolution  : 0.08333333, 0.08333333  (x, y)
 extent      : -180, 180, -90, 90  (xmin, xmax, ymin, ymax)
-coord. ref. : +proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0 
+coord. ref. : +proj=longlat +datum=WGS84 
 data source : in memory
 names       : layer 
 values      : 1, 9331200  (min, max)
+rgdal: version: 0.8.1, (SVN revision 415)
+Geospatial Data Abstraction Library extensions to R successfully loaded
+Loaded GDAL runtime: GDAL 1.9.2, released 2012/10/08
+Path to GDAL shared files: /software/gdal-1.9-el6-x86_64/share/gdal
+Loaded PROJ.4 runtime: Rel. 4.8.0, 6 March 2012, [PJ_VERSION: 480]
+Path to PROJ.4 shared files: (autodetected)
 class       : RasterLayer 
 dimensions  : 2896, 4616, 13367936  (nrow, ncol, ncell)
 resolution  : 1000, 1000  (x, y)
@@ -1136,96 +1148,9 @@ values      : 1988179, 3474018  (min, max)
     overwrite= TRUE)  
 #+END_SRC
 
+** Convert the results to netCDF
 
-* Collate the cell IDs, weights, and multiple variables 
-
-#+BEGIN_SRC R
-  conusPixels <- raster( albersCells)
-  conusPixels[] <- 1:ncell( conusPixels)
-  
-  fractionStack <- stack(
-    conusPixels,
-    albersCells,
-    raster( "output/albers/cropFreq.tif"),
-    raster( "output/albers/clay.tif"),
-    raster( "output/albers/sand.tif"),
-    raster( "output/albers/silt.tif"))
-  names( fractionStack)[ 1:3] <- c( "pixel", "cell", "cropFreq")
-  
-  fractionDt <- data.table( fractionStack[], key= "pixel,cell")
-  ## setkey( fractionDt, cell)
-  fractionDt <- fractionDt[ conusCells[ I( hasConus)]]
-  fractionDt[, hasConus := NULL]
-  fractionDt[, total := sand + silt + clay]
-  fractionDt <- fractionDt[ !is.na( total)][ total > 0]
-  scaledFractionDt <- copy( fractionDt)
-  setkey( scaledFractionDt, pixel, cell)
-  scaledFractionDt <- scaledFractionDt[, lapply(
-    .SD, function( x) x*100/total), by= "pixel,cell"]
-  scaledFractionDt[, `:=`( cropFreq= NULL, total= NULL)]
-  
-  fractionDt <- fractionDt[, list( cell, cropFreq), key= cell][ scaledFractionDt]
-  
-  fractionDt <- fractionDt[ scaledFractionDt]
-  
-  sumCropFreq <- fractionDt[, list( crop= sum( cropFreq)), by= cell]
-  ## sumCropFreq <- sumCropFreq
-  
-  fractionCropDt <- fractionDt[, lapply(
-    .SD, weighted.mean, w= cropFreq, na.rm= TRUE), by= cell]
-  
-  fractionCropDt <- fractionCropDt[, cropFreq := NULL]
-  
-  fractionCropDt[ sumCropFreq[ crop == 0]] <-
-    fractionCropDt[ sumCropFreq[ crop == 0],
-                   lapply( .SD, function(x) 0)]
-  
-  
-  fractionAllDt <-  fractionDt[ total == 100, lapply(
-    .SD, mean, na.rm= TRUE), by= cell]
-  fractionAllDt[, cropFreq := NULL]
-  fractionAllDt[, total := sand + silt + clay]
-  
-  meanFractionDt <- `[`(
-    x= `[`(
-      x= fractionDt,
-      i= conusCells[ I( hasConus),]),
-    j= lapply(
-      .SD,
-      weighted.mean,
-      w= cropFreq,
-      na.rm= TRUE),
-      ## fractionAll=  mean(
-      ##   fraction,
-      ##   na.rm= TRUE)),
-    by= cell)
-  
-  fractionDt <- `[`(
-    x= fractionDt,
-    i= is.nan( fractionCrop),
-    fractionCrop := 0)
-  
-  fractionAll <- raster( world)
-  fractionAll[ fractionDt$cell] <- fractionDt$fractionAll
-  fractionCrop <- raster( world)
-  fractionCrop[ fractionDt$cell] <- fractionDt$fractionCrop
-  
-  fractionAll <- trim(
-    fractionAll,
-    filename= "output/fractionAll.tif",
-    overwrite= TRUE)
-  
-  fractionCrop <- crop(
-    fractionCrop,
-    fractionAll,
-    filename= "output/fractionCrop.tif",
-    overwrite= TRUE)  
-#+END_SRC
-
-
-* Convert the results to netCDF
-
-** Mean of all CONUS-Soil pixels
+*** Mean of all CONUS-Soil pixels
 
 #+BEGIN_SRC sh :session
   gdal_translate -of netCDF \
@@ -1279,7 +1204,8 @@ variables:
 }
 #+end_example
 
-** Weighted mean of CONUS-Soil pixels according to NLCD crop frequency
+
+*** Weighted mean of CONUS-Soil pixels according to NLCD crop frequency
 
 #+BEGIN_SRC sh :session
   gdal_translate -of netCDF \
@@ -1333,7 +1259,8 @@ variables:
 }
 #+end_example
 
-** Combine the two variables
+
+*** Combine the two variables
 
 #+BEGIN_SRC sh :session
   cdo -f nc4 -z zip setname,rockdepmAll output/rockdepmAll.nc4 output/rockdepmAll_.nc4
@@ -1383,3 +1310,321 @@ variables:
 }
 #+end_example
 
+
+
+* Aggregate soil fractions for first layer
+
+#+BEGIN_SRC R
+  conusPixels <- raster( albersCells)
+  conusPixels[] <- 1:ncell( conusPixels)
+  
+  fractionStack <- stack(
+    albersCells,
+    conusPixels,
+    raster( "output/albers/cropFreq.tif"),
+    raster( "output/albers/clay.tif"),
+    raster( "output/albers/sand.tif"),
+    raster( "output/albers/silt.tif"))
+  names( fractionStack)[ 1:3] <- c( "cell", "pixel", "cropFreq")
+  
+  fractionDt <- data.table( fractionStack[], key= "cell,pixel")
+  fractionDt <- fractionDt[ conusCells[ I( hasConus)]]
+  fractionDt[, hasConus := NULL]
+  fractionDt[, total := sand + silt + clay]
+  
+  fractionDt <- fractionDt[ total > 0]
+  
+  ## scaledFractionDt <- copy( fractionDt)
+  ## setkey( scaledFractionDt, pixel, cell)
+  
+  scaledFractionDt <-
+    fractionDt[, list(
+      clay= clay*100.0/total,
+      sand= sand*100.0/total,
+      silt= silt*100.0/total),
+                     by= "cell,pixel"]
+  scaledFractionDt[, total := clay + sand + silt]
+  
+  ## scaledFractionDt <- scaledFractionDt[, lapply(
+  ##   .SD, function( x) x*100.0/total), by= "pixel,cell"]
+  
+  ## scaledFractionDt[, `:=`( cropFreq= NULL, total= NULL)]
+  
+  ## fractionDt <- fractionDt[, list( cell, cropFreq), key= cell][ scaledFractionDt]
+  
+  fractionDt <-  scaledFractionDt[ fractionDt[, list( cell, pixel, cropFreq)]]
+  
+  sumCropFreq <- fractionDt[, list( crop= sum( cropFreq)), keyby= cell]
+  
+  fractionCropDt <- fractionDt[, lapply(
+    .SD, weighted.mean, w= cropFreq, na.rm= TRUE), keyby= cell]
+  fractionCropDt[, `:=`(
+    cropFreq= NULL,
+    total= NULL,
+    pixel= NULL)]
+  
+  fractionCropDt[ sumCropFreq[ crop == 0]] <-
+    fractionCropDt[ sumCropFreq[ crop == 0],
+                   lapply( .SD, function(x) 0)]
+  fractionCropDt[, total := clay+sand+silt]
+  
+  fractionAllDt <-  fractionDt[, lapply(
+    .SD, mean, na.rm= TRUE), keyby= cell]
+  fractionAllDt[, `:=`(
+    cropFreq= NULL,
+    total= NULL,
+    pixel= NULL)]
+  fractionAllDt[, total := clay+sand+silt]
+  
+  fractionAll <- brick( world, nl= 3, values= FALSE)
+  fractionAll[ fractionAllDt$cell] <-
+    as.matrix( fractionAllDt[, list( clay, sand, silt)])
+  
+  fractionCrop <- brick( world, nl= 3, values= FALSE)
+  fractionCrop[ fractionCropDt$cell] <-
+    as.matrix( fractionCropDt[, list( clay, sand, silt)])
+  
+  fractionAll <- trim(
+    fractionAll,
+    filename= "output/fractionAll.tif",
+    overwrite= TRUE)
+  
+  fractionCrop <- crop(
+    fractionCrop,
+    fractionAll,
+    filename= "output/fractionCrop.tif",
+    overwrite= TRUE)  
+#+END_SRC
+
+
+
+* Aggregate soil fractions for all layers
+
+** Set up data and perform aggregations
+
+#+BEGIN_SRC R
+  
+  cropFreqStack <- stack(
+      albersCells,
+      conusPixels,
+      raster( "output/albers/cropFreq.tif"))
+  names( cropFreqStack) <- c( "cell", "pixel", "crop")
+      
+  cropFreqDt <- data.table(
+      cropFreqStack[],
+      key= "cell,pixel")
+  
+  # aggCropFreqDt <- cropFreqDt[, list( crop
+  
+  fracTotals <-
+      brick( "output/albers/clay.tif") +
+      brick( "output/albers/sand.tif") +
+      brick( "output/albers/silt.tif")
+      
+  fracTotalGtZero <- calc(
+      fracTotals,
+      function(x) ifelse( x > 0, 1, NA),
+      dataType= "LOG1S",
+      filename= "output/albers/fracTotalGtZero.tif",
+      overwrite= TRUE)
+  
+  maskedFracs <- list(
+      clay= mask( brick( "output/albers/clay.tif"),
+          fracTotalGtZero),
+      sand= mask( brick( "output/albers/sand.tif"),
+          fracTotalGtZero),
+      silt= mask( brick( "output/albers/silt.tif"),
+          fracTotalGtZero))
+      
+  fractionStack <- function( fraction= "clay") {
+      s <- stack(
+          albersCells,
+          conusPixels,
+          ## brick( sprintf( "output/albers/%s.tif", fraction)))
+          maskedFracs[[ fraction]])
+      names( s)[ 1:2] <- c( "cell", "pixel")
+      names( s)[ 3:13] <- sprintf( "layer.%d", 1:11)
+      s
+  }
+  
+  
+  clayDt <- data.table(
+      fractionStack( "clay")[],
+      key= "cell,pixel")
+  
+  pixelsWithData <- calc(
+      fracTotalGtZero,
+      function(x) any( as.logical( x)),
+      filename= "output/albers/pixelsWithData.tif",
+      overwrite= TRUE)
+  
+  maskStack <- stack( albersCells, conusPixels, pixelsWithData)
+  names( maskStack) <- c( "cell", "pixel", "data")
+  maskDt <- data.table(
+      maskStack[],
+      key= "cell,pixel")[ data == 1]
+  maskDt[, data:= NULL]
+  
+  outputMask <- raster( world)
+  outputMask[ unique( maskDt[, cell])] <- 1
+  outputMask <- trim(
+      outputMask,
+      filename= "output/outputMask.tif",
+      overwrite= TRUE)
+  
+  clayDt <- clayDt[ maskDt]
+  clayMeans <- rbindlist( list(
+      clayDt[, lapply(
+          .SD, mean, na.rm= TRUE),
+             by= "cell"][, `:=`(
+                 cover= "all",
+                 pixel= NULL)],
+      cropFreqDt[ clayDt][, lapply(
+          .SD, weighted.mean, w= crop, na.rm= TRUE),
+                          by= "cell"][, `:=`(
+                              cover= "crop",
+                              pixel= NULL,
+                              crop= NULL)]))
+  setkey( clayMeans, cell, cover)
+  clayMeans[, frac := "clay"]
+  
+  sandDt <- sandDt[ maskDt]
+  sandDt <- data.table(
+      fractionStack( "sand")[],
+      key= "cell,pixel")
+  sandDt <- sandDt[ J( cellsWithData)]
+  sandMeans <- rbindlist( list(
+      sandDt[, lapply(
+          .SD, mean, na.rm= TRUE),
+             by= "cell"][, `:=`(
+                 cover= "all",
+                 pixel= NULL)],
+      cropFreqDt[ sandDt][, lapply(
+          .SD, weighted.mean, w= crop, na.rm= TRUE),
+                          by= "cell"][, `:=`(
+                              cover= "crop",
+                              pixel= NULL,
+                              crop= NULL)]))
+  setkey( sandMeans, cell, cover)
+  sandMeans[, frac := "sand"]
+  
+  siltDt <- siltDt[ maskDt]
+  siltDt <- data.table(
+      fractionStack( "silt")[],
+      key= "cell,pixel")
+  siltDt <- siltDt[ J( cellsWithData)]
+  siltMeans <- rbindlist( list(
+      siltDt[, lapply(
+          .SD, mean, na.rm= TRUE),
+             by= "cell"][, `:=`(
+                 cover= "all",
+                 pixel= NULL)],
+      cropFreqDt[ siltDt][, lapply(
+          .SD, weighted.mean, w= crop, na.rm= TRUE),
+                          by= "cell"][, `:=`(
+                              cover= "crop",
+                              pixel= NULL,
+                              crop= NULL)]))
+  setkey( siltMeans, cell, cover)
+  siltMeans[, frac := "silt"]
+  
+  meansDt <- rbindlist(
+      list( clayMeans, sandMeans, siltMeans))
+  ##setkey( meansDt, cover, frac, cell)
+  setkey( meansDt, frac, cover, cell)
+  
+  outputNames <- CJ(
+      frac=c( "clay", "sand", "silt"),
+      cover= c( "crop", "all"))
+  
+  writeFracCoverBrick <- function( frac= "clay", cover= "all") {
+      b <- brick( world, nl= 11, values= FALSE)
+      j <- data.table( frac, cover)
+      b[ meansDt[ j][, cell]] <-
+          as.matrix(
+              meansDt[ j][, sprintf( "layer.%d", 1:11),
+                                          with= FALSE])
+      b <- crop(
+          b, outputMask,
+          filename= sprintf( "output/%s.%s.tif", frac, cover),
+          overwrite= TRUE)
+      b
+  }
+  
+  
+  fracCoverBricks <-
+      with( outputNames,
+           mapply(
+               writeFracCoverBrick,
+               frac,
+               cover))
+  names(fracCoverBricks) <-
+      paste(
+          names(fracCoverBricks),
+          c( "all", "crop"),
+          sep=".")
+#+END_SRC
+
+
+** Check results and scale to unity
+
+#+BEGIN_SRC R
+  totalsAll <- with( fracCoverBricks, clay.all + sand.all + silt.all)
+  totalsCrop <- with( fracCoverBricks, clay.crop + sand.crop + silt.crop)
+  
+  ## freq( totalsAll, merge=TRUE)
+  
+  fracCoverBricks <-
+      within( fracCoverBricks, {
+          clay.all <- clay.all * 100 / totalsAll
+          sand.all <- sand.all * 100 / totalsAll
+          silt.all <- silt.all * 100 / totalsAll
+          clay.crop <- clay.crop * 100 / totalsCrop
+          sand.crop <- sand.crop * 100 / totalsCrop
+          silt.crop <- silt.crop * 100 / totalsCrop
+      })
+  
+  namesFracCoverBricks <- names( fracCoverBricks)
+  names( namesFracCoverBricks) <- names( fracCoverBricks)
+  
+  fracCoverBricks <- llply(
+      namesFracCoverBricks,
+      function( fracCover) {
+          writeRaster(
+              fracCoverBricks[[ fracCover]],
+              sprintf( "output/%s.tif", fracCover),
+              overwrite= TRUE)})
+  
+  names(fracCoverBricks) <-
+      CJ( frac= c( "clay", "sand", "silt"),
+          cover= c( "all", "crop")
+         )[, paste( frac, cover, sep=".")]
+  
+  totalsAll <- with( fracCoverBricks, clay.all + sand.all + silt.all)
+  totalsCrop <- with( fracCoverBricks, clay.crop + sand.crop + silt.crop)
+  freq( totalsAll, merge=TRUE)
+  #+END_SRC
+
+
+** Convert to netCDFs
+
+#+BEGIN_SRC R :results output
+  llply(
+      namesFracCoverBricks,
+      function( fracCover) {
+          ## oldFn <- filename( fracCoverBricks[[ fracCover]])
+          oldFn <- sprintf( "output/%s.tif", fracCover)
+          system(
+              paste( 
+                  "gdal_translate -of netCDF",
+                  "-co \"FORMAT=NC4\"",
+                  "-co \"COMPRESS=DEFLATE\"",
+                  "-co \"ZLEVEL=5\"",
+                  oldFn,
+                  str_replace( oldFn, "tif$", "nc4")),
+              intern= TRUE) })
+#+END_SRC
+
+=gdal_translate= treats each band as a separate variable.  Creating
+netCDFs with each variable in a matrix or using levels, better
+variable names, etc. will require more work.
